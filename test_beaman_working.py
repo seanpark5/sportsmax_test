@@ -18,15 +18,25 @@ EMAIL = os.environ.get("SPORTSMAX_EMAIL", "").strip()
 PASSWORD = os.environ.get("SPORTSMAX_PASSWORD", "").strip()
 
 
-def fmt_minutes(value):
-    try:
-        total = int(value)
-    except Exception:
-        return str(value)
+def fmt_minutes(total):
+    total = int(total)
     h, m = divmod(total, 60)
     suffix = "am" if h < 12 else "pm"
     h12 = h % 12 or 12
     return f"{h12}:{m:02d} {suffix}"
+
+
+def hourly_price(session):
+    cost = session.get("Cost")
+    interval = session.get("Interval")
+    try:
+        cost = float(cost)
+        interval = float(interval)
+    except (TypeError, ValueError):
+        return None
+    if interval <= 0:
+        return None
+    return cost * 60 / interval
 
 
 async def api_get(page, url, params):
@@ -44,12 +54,14 @@ async def api_get(page, url, params):
                     "Pragma": "no-cache"
                 }
             });
-            return {status:r.status, text:await r.text()};
+            return {status:r.status, text:await r.text(), finalUrl:u.toString()};
         }""",
         {"url": url, "params": params},
     )
+    print(f"HTTP {result['status']} {result['finalUrl']}", flush=True)
     if result["status"] != 200:
-        raise RuntimeError(f"{url} HTTP {result['status']}: {result['text'][:500]}")
+        print(result["text"][:1200], flush=True)
+        raise RuntimeError(f"HTTP {result['status']}")
     return json.loads(result["text"])
 
 
@@ -58,13 +70,14 @@ async def login(page):
         raise RuntimeError("SPORTSMAX_EMAIL / SPORTSMAX_PASSWORD missing")
 
     await page.goto(BOOKING_URL, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(800)
 
     if "auth.clubspark.net" in page.url.lower():
         email = page.locator('input[name="EmailAddress"]').first
         password = page.locator('input[name="Password"]').first
         await email.wait_for(state="visible", timeout=30000)
         await password.wait_for(state="visible", timeout=30000)
+
         await email.fill(EMAIL)
         await password.fill(PASSWORD)
 
@@ -76,77 +89,84 @@ async def login(page):
 
         try:
             await page.wait_for_url(
-                lambda u: "clubspark.au" in u.lower() and "auth.clubspark.net" not in u.lower(),
+                lambda u: "clubspark.au" in u.lower()
+                and "auth.clubspark.net" not in u.lower(),
                 timeout=60000,
             )
         except Exception:
             await page.wait_for_timeout(5000)
 
     if "clubspark.au" not in page.url.lower():
-        raise RuntimeError(f"Login did not return to clubspark.au: {page.url}")
-
-    if "/sportsmax/" not in page.url.lower():
-        await page.goto(BOOKING_URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(1000)
+        raise RuntimeError(f"Login failed: {page.url}")
 
 
-def inspect_beaman(payload, date_str):
+def print_beaman(payload, requested_date):
     resources = payload.get("Resources") or []
-    beaman = [r for r in resources if r.get("ResourceGroupID") == BEAMAN_GROUP_ID]
+    courts = [
+        r for r in resources
+        if r.get("ResourceGroupID") == BEAMAN_GROUP_ID
+    ]
 
-    print(f"\n=== {date_str} ===", flush=True)
-    print(f"Beaman courts={len(beaman)}", flush=True)
+    print(f"\n=== {requested_date} ===", flush=True)
+    print(f"Beaman courts found: {len(courts)}", flush=True)
 
-    found = 0
+    pricing_count = 0
 
-    for r in beaman:
-        court = r.get("Name") or r.get("ID")
-        days = r.get("Days") or []
+    for court in courts:
+        court_name = court.get("Name") or court.get("ID")
+        rows = []
 
-        court_sessions = []
-        for d in days:
-            for s in d.get("Sessions") or []:
-                court_sessions.append((d, s))
+        for day in court.get("Days") or []:
+            date_str = str(day.get("Date") or requested_date)[:10]
+            for session in day.get("Sessions") or []:
+                if str(session.get("Name") or "").lower() != "pricing":
+                    continue
 
-        if not court_sessions:
+                start = session.get("StartTime")
+                end = session.get("EndTime")
+                if start is None or end is None:
+                    continue
+
+                hp = hourly_price(session)
+                rows.append(
+                    (
+                        date_str,
+                        fmt_minutes(start),
+                        fmt_minutes(end),
+                        hp,
+                        session.get("Cost"),
+                        session.get("Interval"),
+                    )
+                )
+
+        print(f"\n{court_name}", flush=True)
+        if not rows:
+            print("  No available Pricing windows.", flush=True)
             continue
 
-        print(f"\n{court}", flush=True)
+        for date_str, start, end, hp, cost, interval in rows:
+            if hp is not None:
+                price = f"${hp:.2f}/hr"
+            else:
+                price = f"cost={cost}, interval={interval}"
 
-        for day, s in court_sessions:
-            found += 1
-            name = s.get("Name")
-            start = s.get("StartTime")
-            end = s.get("EndTime")
-            cost = s.get("Cost")
-            interval = s.get("Interval")
+            print(
+                f"  {date_str}  {start}–{end}  {price}",
+                flush=True,
+            )
+            pricing_count += 1
 
-            parts = [
-                f"name={name!r}",
-                f"time={fmt_minutes(start)}-{fmt_minutes(end)}",
-            ]
-            if cost is not None:
-                parts.append(f"cost={cost}")
-            if interval is not None:
-                parts.append(f"interval={interval}")
-
-            print("  " + " | ".join(parts), flush=True)
-
-            # Print keys for first few sessions so we can map the real schema.
-            if found <= 5:
-                print(f"    keys={sorted(s.keys())}", flush=True)
-
-    if found == 0:
-        print("No Beaman session objects returned.", flush=True)
-    else:
-        print(f"\nSession objects found for {date_str}: {found}", flush=True)
-
-    return found
+    print(
+        f"\nPricing windows for {requested_date}: {pricing_count}",
+        flush=True,
+    )
+    return pricing_count
 
 
 async def main():
     start = datetime.now(SYDNEY).date()
-    print("=== Authenticated Beaman 11-day availability test ===", flush=True)
+
+    print("=== WORKING authenticated Beaman scrape ===", flush=True)
     print(f"start={start.isoformat()}", flush=True)
 
     async with async_playwright() as p:
@@ -165,6 +185,7 @@ async def main():
 
             stamp = int(time.time() * 1000)
             settings = await api_get(page, SETTINGS_URL, {"_": stamp})
+
             print(
                 f"IsAuthenticated={settings.get('IsAuthenticated')} "
                 f"MustAuthenticate={settings.get('MustAuthenticate')}",
@@ -172,19 +193,23 @@ async def main():
             )
 
             if settings.get("IsAuthenticated") is not True:
-                raise RuntimeError("Authentication failed")
+                raise RuntimeError("Not authenticated")
 
             total = 0
 
-            for offset in range(11):
-                d = start + timedelta(days=offset)
-                ds = d.isoformat()
+            # First 3 days are enough to visually prove live scraping.
+            for offset in range(3):
+                date = start + timedelta(days=offset)
+                ds = date.isoformat()
 
+                # IMPORTANT:
+                # The real SportsMax browser request sends resourceID BLANK.
+                # Filter Beaman after receiving the full payload.
                 payload = await api_get(
                     page,
                     SESSIONS_URL,
                     {
-                        "resourceID": BEAMAN_GROUP_ID,
+                        "resourceID": "",
                         "startDate": ds,
                         "endDate": ds,
                         "roleId": "",
@@ -192,17 +217,19 @@ async def main():
                     },
                 )
 
-                total += inspect_beaman(payload, ds)
-                await page.wait_for_timeout(250)
+                total += print_beaman(payload, ds)
 
-            print(f"\nTOTAL BEAMAN SESSION OBJECTS ACROSS 11 DAYS: {total}", flush=True)
+            print(
+                f"\nTOTAL BEAMAN AVAILABLE WINDOWS: {total}",
+                flush=True,
+            )
 
             if total > 0:
-                print("✅ BEAMAN COURT DATA IS BEING SCRAPED", flush=True)
+                print("✅ BEAMAN COURT AVAILABILITY SCRAPED SUCCESSFULLY", flush=True)
             else:
                 print(
-                    "⚠️ API authenticated successfully but returned zero "
-                    "Beaman session objects across all 11 days.",
+                    "⚠️ Authenticated request worked but no Pricing windows "
+                    "were returned in these 3 days.",
                     flush=True,
                 )
 
