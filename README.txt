@@ -1,15 +1,15 @@
-SPORTSMAX VERCEL RELAY TEST
+BEAMAN PARK RENDER TEST
 
-Replace the old direct-Render SportsMax test with these files.
+Purpose:
+Test only Beaman Park for one date from a fresh Render service.
 
-Render environment variables:
-SPORTSMAX_PROXY_URL=https://www.courtscouter.com/api/internal/sportsmax
-SPORTSMAX_PROXY_SECRET=<EXACT SAME VALUE AS VERCEL>
+No environment variables needed.
+No scheduler.
+No database.
+No Vercel relay.
 
-Vercel must also have SPORTSMAX_PROXY_SECRET set to the exact same value,
-and Vercel must be redeployed after adding/changing it.
+Expected:
+- GetSettings 200
+- Beaman-specific GetVenueSessions using resourceID=fb825473-257b-4951-91d9-f3ce04657284
 
-Interpretation:
-401 -> secrets do not match.
-502 with ClubSpark HTTP 500 -> Vercel is reachable, but ClubSpark rejects Vercel too.
-200 -> relay works and can be used by the main CourtScouter scraper.
+If Beaman-specific still returns 500, the problem is not caused by fetching all five SportsMax venues together.
