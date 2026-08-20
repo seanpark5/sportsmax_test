@@ -1,15 +1,40 @@
-BEAMAN PARK RENDER TEST
+AUTHENTICATED BEAMAN PARK RENDER TEST
 
 Purpose:
-Test only Beaman Park for one date from a fresh Render service.
+Test whether SportsMax succeeds on Render after logging into ClubSpark.
 
-No environment variables needed.
-No scheduler.
-No database.
-No Vercel relay.
+FILES
+-----
+Dockerfile
+requirements.txt
+test_beaman_auth.py
 
-Expected:
-- GetSettings 200
-- Beaman-specific GetVenueSessions using resourceID=fb825473-257b-4951-91d9-f3ce04657284
+RENDER ENVIRONMENT VARIABLES
+----------------------------
+SPORTSMAX_EMAIL=<your ClubSpark login email>
+SPORTSMAX_PASSWORD=<your ClubSpark password>
 
-If Beaman-specific still returns 500, the problem is not caused by fetching all five SportsMax venues together.
+Do NOT put the email/password in GitHub or the Python file.
+
+DEPLOY
+------
+Use the existing sportsmax_test repo or a new test repo.
+Replace its files with these files.
+Commit to main.
+Redeploy the Render test service.
+
+SUCCESS
+-------
+Authenticated GetSettings:
+IsAuthenticated=True
+MustAuthenticate=False
+
+Then:
+Beaman-only GetVenueSessions -> HTTP 200
+
+If login succeeds but GetVenueSessions still returns 500,
+then authentication alone is not the missing factor.
+
+If the script cannot find the login form, paste the log including
+the "current URL" line and we can tailor the selectors to the exact
+ClubSpark auth page.
