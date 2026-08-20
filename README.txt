@@ -1,17 +1,15 @@
-AUTHENTICATED BEAMAN AVAILABILITY TEST
+BEAMAN 11-DAY AUTHENTICATED TEST
 
-Required Render variables:
+Uses:
 SPORTSMAX_EMAIL
 SPORTSMAX_PASSWORD
 
-This test logs in, calls GetVenueSessions for Beaman only, and prints
-actual Beaman court availability rows.
+Purpose:
+- Authenticate to ClubSpark on Render
+- Query Beaman Park one day at a time for the next 11 days
+- Print every returned session object court-by-court
+- Print the keys from the first few session objects so the production parser
+  can be mapped to the live response exactly
 
-If Pricing rows are returned, logs show:
-Court name
-date
-start-end
-hourly price
-
-If Pricing rows are zero, it prints the actual returned Session names
-so the production parser can be adjusted to the current ClubSpark payload.
+Success indicator:
+✅ BEAMAN COURT DATA IS BEING SCRAPED
