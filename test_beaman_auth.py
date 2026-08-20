@@ -19,7 +19,7 @@ EMAIL = os.environ.get("SPORTSMAX_EMAIL", "").strip()
 PASSWORD = os.environ.get("SPORTSMAX_PASSWORD", "").strip()
 
 
-async def dump_state(page, label):
+async def print_page(page, label):
     print(f"\n--- {label} ---", flush=True)
     print(f"url={page.url}", flush=True)
     try:
@@ -28,180 +28,11 @@ async def dump_state(page, label):
         pass
 
 
-async def login_if_needed(page):
-    await page.goto(
-        BOOKING_URL,
-        wait_until="domcontentloaded",
-        timeout=60_000,
-    )
-    await page.wait_for_timeout(1500)
-    await dump_state(page, "after initial SportsMax navigation")
-
-    # The exact login host/form can change, so use robust field discovery.
-    # First, detect whether we're already authenticated by testing GetSettings.
-    settings = await page.evaluate(
-        """
-        async (url) => {
-            const r = await fetch(url + "?_=" + Date.now(), {
-                method: "GET",
-                credentials: "include",
-                cache: "no-store",
-                headers: {
-                    "Accept": "*/*",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Cache-Control": "no-cache",
-                    "Pragma": "no-cache"
-                }
-            });
-            return {status: r.status, text: await r.text()};
-        }
-        """,
-        SETTINGS_URL,
-    )
-
-    if settings["status"] == 200:
-        try:
-            payload = json.loads(settings["text"])
-        except Exception:
-            payload = {}
-        print(
-            f"Initial GetSettings: IsAuthenticated={payload.get('IsAuthenticated')} "
-            f"MustAuthenticate={payload.get('MustAuthenticate')}",
-            flush=True,
-        )
-        if payload.get("IsAuthenticated") is True:
-            return
-
-    if not EMAIL or not PASSWORD:
-        raise RuntimeError(
-            "SPORTSMAX_EMAIL and SPORTSMAX_PASSWORD must be set in Render"
-        )
-
-    # Try common email/username selectors.
-    email_selectors = [
-        'input[type="email"]',
-        'input[name="email"]',
-        'input[name="Email"]',
-        'input[name="username"]',
-        'input[name="Username"]',
-        'input[autocomplete="username"]',
-    ]
-
-    password_selectors = [
-        'input[type="password"]',
-        'input[name="password"]',
-        'input[name="Password"]',
-        'input[autocomplete="current-password"]',
-    ]
-
-    email_locator = None
-    for sel in email_selectors:
-        loc = page.locator(sel).first
-        try:
-            if await loc.count() and await loc.is_visible():
-                email_locator = loc
-                break
-        except Exception:
-            pass
-
-    if email_locator is None:
-        # Sometimes the page first shows a sign-in button.
-        for text in ["Sign in", "Log in", "Login"]:
-            btn = page.get_by_text(text, exact=False).first
-            try:
-                if await btn.count() and await btn.is_visible():
-                    await btn.click()
-                    await page.wait_for_timeout(1200)
-                    break
-            except Exception:
-                pass
-
-        for sel in email_selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.count() and await loc.is_visible():
-                    email_locator = loc
-                    break
-            except Exception:
-                pass
-
-    if email_locator is None:
-        raise RuntimeError(
-            f"Could not find SportsMax/ClubSpark email field. Current URL: {page.url}"
-        )
-
-    await email_locator.fill(EMAIL)
-
-    # Some auth flows need "Next" before password appears.
-    password_locator = None
-    for sel in password_selectors:
-        loc = page.locator(sel).first
-        try:
-            if await loc.count() and await loc.is_visible():
-                password_locator = loc
-                break
-        except Exception:
-            pass
-
-    if password_locator is None:
-        for text in ["Next", "Continue"]:
-            btn = page.get_by_role("button", name=text, exact=False).first
-            try:
-                if await btn.count() and await btn.is_visible():
-                    await btn.click()
-                    await page.wait_for_timeout(1200)
-                    break
-            except Exception:
-                pass
-
-        for sel in password_selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.count() and await loc.is_visible():
-                    password_locator = loc
-                    break
-            except Exception:
-                pass
-
-    if password_locator is None:
-        raise RuntimeError(
-            f"Could not find SportsMax/ClubSpark password field. Current URL: {page.url}"
-        )
-
-    await password_locator.fill(PASSWORD)
-
-    submitted = False
-    for name in ["Sign in", "Log in", "Login", "Continue"]:
-        btn = page.get_by_role("button", name=name, exact=False).first
-        try:
-            if await btn.count() and await btn.is_visible():
-                await btn.click()
-                submitted = True
-                break
-        except Exception:
-            pass
-
-    if not submitted:
-        await password_locator.press("Enter")
-
-    # Allow federation/redirect chain to complete.
-    try:
-        await page.wait_for_url(
-            lambda url: "sportsmax" in url.lower(),
-            timeout=60_000,
-        )
-    except Exception:
-        pass
-
-    await page.wait_for_timeout(2500)
-    await dump_state(page, "after login attempt")
-
-
-async def fetch_json(page, url, params):
+async def fetch_json_same_origin(page, url, params):
     result = await page.evaluate(
         """
         async ({url, params}) => {
-            const u = new URL(url, window.location.origin);
+            const u = new URL(url);
             for (const [k, v] of Object.entries(params)) {
                 u.searchParams.set(k, String(v));
             }
@@ -236,16 +67,97 @@ async def fetch_json(page, url, params):
     return json.loads(result["text"])
 
 
+async def login(page):
+    if not EMAIL or not PASSWORD:
+        raise RuntimeError(
+            "SPORTSMAX_EMAIL and SPORTSMAX_PASSWORD must be set in Render"
+        )
+
+    print("Opening SportsMax booking page...", flush=True)
+
+    await page.goto(
+        BOOKING_URL,
+        wait_until="domcontentloaded",
+        timeout=60_000,
+    )
+    await page.wait_for_timeout(1000)
+    await print_page(page, "after SportsMax navigation")
+
+    # If ClubSpark redirects us to its auth host, log in there first.
+    if "auth.clubspark.net" in page.url.lower():
+        print("ClubSpark login required. Logging in...", flush=True)
+
+        email = page.locator('input[name="EmailAddress"]').first
+        password = page.locator('input[name="Password"]').first
+
+        await email.wait_for(state="visible", timeout=30_000)
+        await password.wait_for(state="visible", timeout=30_000)
+
+        await email.fill(EMAIL)
+        await password.fill(PASSWORD)
+
+        remember = page.locator('input[name="RememberMe"]').first
+        try:
+            if await remember.count():
+                checked = await remember.is_checked()
+                if not checked:
+                    await remember.check()
+        except Exception:
+            pass
+
+        submit = page.locator(
+            'button[type="submit"], input[type="submit"]'
+        ).first
+
+        if await submit.count():
+            await submit.click()
+        else:
+            await password.press("Enter")
+
+        # ClubSpark uses a federation redirect chain after successful login.
+        try:
+            await page.wait_for_url(
+                lambda url: "clubspark.au" in url.lower()
+                and "auth.clubspark.net" not in url.lower(),
+                timeout=60_000,
+            )
+        except Exception:
+            # Give the redirect chain a little extra time before deciding.
+            await page.wait_for_timeout(5000)
+
+        await print_page(page, "after login / federation redirect")
+
+    # Ensure we are actually back on the SportsMax origin before making
+    # same-origin API calls.
+    if "clubspark.au" not in page.url.lower() or "auth.clubspark.net" in page.url.lower():
+        raise RuntimeError(
+            f"Login did not return to clubspark.au. Current URL: {page.url}"
+        )
+
+    # If federation returned to another ClubSpark path, explicitly reopen booking.
+    if "/sportsmax/" not in page.url.lower():
+        await page.goto(
+            BOOKING_URL,
+            wait_until="domcontentloaded",
+            timeout=60_000,
+        )
+        await page.wait_for_timeout(1200)
+        await print_page(page, "SportsMax booking page after login")
+
+
 async def main():
     today = datetime.now(SYDNEY_TZ).date().isoformat()
 
-    print("=== Authenticated Beaman Park Render test ===", flush=True)
+    print("=== Authenticated Beaman Park Render test v2 ===", flush=True)
     print(f"date={today}", flush=True)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
+            args=[
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
         )
 
         context = await browser.new_context(
@@ -256,11 +168,13 @@ async def main():
         page = await context.new_page()
 
         try:
-            await login_if_needed(page)
+            await login(page)
+
+            stamp = int(time.time() * 1000)
 
             print("\n1) Authenticated GetSettings", flush=True)
-            stamp = int(time.time() * 1000)
-            settings = await fetch_json(
+
+            settings = await fetch_json_same_origin(
                 page,
                 SETTINGS_URL,
                 {"_": stamp},
@@ -277,11 +191,13 @@ async def main():
 
             if settings.get("IsAuthenticated") is not True:
                 raise RuntimeError(
-                    "Login did not produce IsAuthenticated=True"
+                    "Login completed but GetSettings still reports "
+                    "IsAuthenticated=False"
                 )
 
             print("\n2) Beaman-only GetVenueSessions", flush=True)
-            payload = await fetch_json(
+
+            payload = await fetch_json_same_origin(
                 page,
                 SESSIONS_URL,
                 {
@@ -304,7 +220,11 @@ async def main():
 
             print(f"Resources={len(resources)}", flush=True)
             print(f"PricingSessions={pricing}", flush=True)
-            print("✅ AUTHENTICATED BEAMAN TEST SUCCEEDED", flush=True)
+
+            print(
+                "✅ AUTHENTICATED BEAMAN TEST SUCCEEDED",
+                flush=True,
+            )
 
         finally:
             await context.close()

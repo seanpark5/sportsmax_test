@@ -1,40 +1,21 @@
-AUTHENTICATED BEAMAN PARK RENDER TEST
+AUTHENTICATED BEAMAN RENDER TEST V2
 
-Purpose:
-Test whether SportsMax succeeds on Render after logging into ClubSpark.
+This version fixes the earlier cross-origin bug.
 
-FILES
------
-Dockerfile
-requirements.txt
-test_beaman_auth.py
+Required Render environment variables:
+SPORTSMAX_EMAIL=<ClubSpark email>
+SPORTSMAX_PASSWORD=<ClubSpark password>
 
-RENDER ENVIRONMENT VARIABLES
-----------------------------
-SPORTSMAX_EMAIL=<your ClubSpark login email>
-SPORTSMAX_PASSWORD=<your ClubSpark password>
+It uses the exact login field names observed in the HAR:
+EmailAddress
+Password
+RememberMe
 
-Do NOT put the email/password in GitHub or the Python file.
-
-DEPLOY
-------
-Use the existing sportsmax_test repo or a new test repo.
-Replace its files with these files.
-Commit to main.
-Redeploy the Render test service.
-
-SUCCESS
--------
-Authenticated GetSettings:
-IsAuthenticated=True
-MustAuthenticate=False
-
-Then:
-Beaman-only GetVenueSessions -> HTTP 200
-
-If login succeeds but GetVenueSessions still returns 500,
-then authentication alone is not the missing factor.
-
-If the script cannot find the login form, paste the log including
-the "current URL" line and we can tailor the selectors to the exact
-ClubSpark auth page.
+Expected successful sequence:
+1. Open SportsMax
+2. Redirect to auth.clubspark.net
+3. Fill EmailAddress + Password
+4. Submit
+5. Federation redirect back to clubspark.au
+6. GetSettings -> IsAuthenticated=True
+7. Beaman GetVenueSessions -> HTTP 200
