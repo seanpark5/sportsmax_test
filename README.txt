@@ -1,21 +1,17 @@
-AUTHENTICATED BEAMAN RENDER TEST V2
+AUTHENTICATED BEAMAN AVAILABILITY TEST
 
-This version fixes the earlier cross-origin bug.
+Required Render variables:
+SPORTSMAX_EMAIL
+SPORTSMAX_PASSWORD
 
-Required Render environment variables:
-SPORTSMAX_EMAIL=<ClubSpark email>
-SPORTSMAX_PASSWORD=<ClubSpark password>
+This test logs in, calls GetVenueSessions for Beaman only, and prints
+actual Beaman court availability rows.
 
-It uses the exact login field names observed in the HAR:
-EmailAddress
-Password
-RememberMe
+If Pricing rows are returned, logs show:
+Court name
+date
+start-end
+hourly price
 
-Expected successful sequence:
-1. Open SportsMax
-2. Redirect to auth.clubspark.net
-3. Fill EmailAddress + Password
-4. Submit
-5. Federation redirect back to clubspark.au
-6. GetSettings -> IsAuthenticated=True
-7. Beaman GetVenueSessions -> HTTP 200
+If Pricing rows are zero, it prints the actual returned Session names
+so the production parser can be adjusted to the current ClubSpark payload.
